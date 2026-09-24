@@ -1,0 +1,9 @@
+{
+  "outputDirectory": "dist-web",
+  "rewrites": [
+    {
+      "source": "/((?!assets/|thumbnails/|sw\\.js|manifest\\.json|icon\\.svg|api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
