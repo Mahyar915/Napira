@@ -261,7 +261,11 @@ export default function VideoCard({ video, onPlay, onRename, onDelete, onToggleF
         <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10">
           {getSourceBadge()}
           <div className="flex items-center gap-1">
-            {video.duration ? (
+            {video.isProcessing ? (
+              <span className={`flex items-center gap-1 bg-cyan-400 text-slate-950 ${isGiant ? 'text-xs px-2 py-0.5' : 'text-[10px] px-1.5 py-0.5'} font-extrabold rounded backdrop-blur-sm shadow animate-pulse`}>
+                Optimizing...
+              </span>
+            ) : video.duration ? (
               <span className={`flex items-center gap-0.5 bg-black/80 text-white ${isGiant ? 'text-xs px-2 py-1' : 'text-[10px] px-1.5 py-0.5'} font-semibold rounded backdrop-blur-sm`}>
                 <Clock className={isGiant ? 'w-3 h-3' : 'w-2.5 h-2.5'} />
                 {formatDuration(video.duration)}

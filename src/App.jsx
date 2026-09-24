@@ -16,7 +16,7 @@ import {
   toggleFavorite, 
   resetToDefaults 
 } from './db/indexedDB';
-import { generateVideoThumbnail, formatBytes } from './utils/thumbnail';
+import { generateVideoThumbnail, createFastPlaceholderThumbnail, formatBytes } from './utils/thumbnail';
 import { Smartphone, Film, Star, Loader2, Sparkles } from 'lucide-react';
 
 export default function App() {
@@ -185,41 +185,75 @@ export default function App() {
   const handleAddDeviceFiles = async (files) => {
     if (!files || files.length === 0) return;
 
+    // Reset search filters so newly uploaded videos are immediately visible
+    setSearchQuery('');
+    setSelectedTag('all');
+    setActiveFilter('gallery');
+
+    // 1. Optimistic Instant UI Insertion (< 30ms)
+    // Instantly create cards with lightweight placeholder thumbnails and file sizes
+    const optimisticItems = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const cleanTitle = file.name.replace(/\.[^/.]+$/, "");
+      const instantThumb = createFastPlaceholderThumbnail(cleanTitle);
+
+      const optimisticItem = {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+        title: cleanTitle || `Video ${videos.length + i + 1}`,
+        type: 'local',
+        source: 'gallery',
+        size: formatBytes(file.size),
+        duration: null,
+        thumbnail: instantThumb,
+        videoBlob: file,
+        createdAt: new Date().toISOString(),
+        favorite: false,
+        isProcessing: true,
+      };
+      optimisticItems.unshift(optimisticItem);
+    }
+
+    // Immediately show cards on screen!
+    setVideos((prev) => [...optimisticItems, ...prev]);
+    if (navigator.vibrate) navigator.vibrate(30);
+
+    // 2. Background Asynchronous Thumbnail Extraction & IndexedDB Persistence
     setIsProcessingFiles(true);
     setProcessingProgress({ current: 0, total: files.length });
 
-    const newItems = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      setProcessingProgress({ current: i + 1, total: files.length });
+    for (let i = 0; i < optimisticItems.length; i++) {
+      const item = optimisticItems[i];
+      const file = item.videoBlob;
+      setProcessingProgress({ current: i + 1, total: optimisticItems.length });
 
       try {
         const { thumbnail, duration } = await generateVideoThumbnail(file);
-        const cleanTitle = file.name.replace(/\.[^/.]+$/, "");
-
-        const videoItem = {
-          id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          title: cleanTitle || `Video ${videos.length + i + 1}`,
-          type: 'local',
-          source: 'gallery',
-          size: formatBytes(file.size),
-          duration,
-          thumbnail,
-          videoBlob: file,
-          createdAt: new Date().toISOString(),
-          favorite: false
+        const finalItem = {
+          ...item,
+          thumbnail: thumbnail || item.thumbnail,
+          duration: duration || null,
+          isProcessing: false,
         };
 
-        await addVideo(videoItem);
-        newItems.unshift(videoItem);
+        // Save to IndexedDB in background
+        await addVideo(finalItem);
+
+        // Update card in UI with high-res thumbnail & duration
+        setVideos((prev) =>
+          prev.map((v) => (v.id === item.id ? finalItem : v))
+        );
       } catch (err) {
-        console.error('Error importing video file:', file.name, err);
+        console.warn('Background optimize error for:', item.title, err);
+        const fallbackItem = { ...item, isProcessing: false };
+        await addVideo(fallbackItem);
+        setVideos((prev) =>
+          prev.map((v) => (v.id === item.id ? fallbackItem : v))
+        );
       }
     }
 
-    setVideos((prev) => [...newItems, ...prev]);
     setIsProcessingFiles(false);
-    setActiveFilter('gallery');
     if (navigator.vibrate) navigator.vibrate(50);
   };
 
@@ -385,10 +419,10 @@ export default function App() {
 
       {/* Device Import Progress Banner */}
       {isProcessingFiles && (
-        <div className="bg-indigo-600 text-white text-xs sm:text-sm py-2 px-4 text-center font-bold flex items-center justify-center gap-2 shadow-inner">
-          <Loader2 className="w-4 h-4 animate-spin" />
+        <div className="bg-gradient-to-r from-cyan-600 via-indigo-600 to-purple-600 text-white text-xs sm:text-sm py-2 px-4 text-center font-bold flex items-center justify-center gap-2 shadow-inner animate-in fade-in duration-150">
+          <Loader2 className="w-4 h-4 animate-spin text-cyan-200" />
           <span>
-            Processing & generating thumbnails: {processingProgress.current} of {processingProgress.total}...
+            Optimizing video thumbnails: {processingProgress.current} of {processingProgress.total}... (Videos are ready to play)
           </span>
         </div>
       )}

@@ -1,12 +1,13 @@
 /**
- * Generates a high-quality thumbnail image (dataURL) and gets metadata (duration)
- * from a video File/Blob, with anti-black-frame detection and mobile GPU frame delay.
+ * Fast video thumbnail generation and metadata extraction.
+ * Optimized for large files (100MB - 1GB+) with 'metadata' preloading,
+ * shallow keyframe seeking (0.5s), and fast safety timeout fallback.
  *
  * @param {File|Blob} videoFile 
- * @param {number} seekTimeSec Target snapshot time in seconds (default 1.5s to bypass camera fade-in)
+ * @param {number} seekTimeSec Target snapshot time (default 0.5s for instant keyframe access)
  * @returns {Promise<{ thumbnail: string, duration: number }>}
  */
-export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
+export function generateVideoThumbnail(videoFile, seekTimeSec = 0.5) {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     const objectUrl = URL.createObjectURL(videoFile);
@@ -15,7 +16,9 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
     video.playsInline = true;
     video.setAttribute('playsinline', '');
     video.setAttribute('webkit-playsinline', '');
-    video.preload = 'auto';
+    // Crucial: Use 'metadata' instead of 'auto' so browser only reads MP4 headers (a few KB),
+    // NOT the entire 500MB+ video file into RAM!
+    video.preload = 'metadata';
 
     // Must be in DOM with realistic dimensions (> 100px) so iOS WebKit decodes frames
     video.style.position = 'fixed';
@@ -68,16 +71,14 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Check if the captured frame is completely black
-        if (isFrameBlack(ctx, canvas.width, canvas.height) && seekAttempts < 2 && video.duration > 2) {
+        // If the captured frame is pitch black, try seeking 1s further once
+        if (isFrameBlack(ctx, canvas.width, canvas.height) && seekAttempts < 1 && video.duration > 2) {
           seekAttempts++;
-          // Seek further into the video (e.g. 2.5s or 40% into video)
-          const newTarget = Math.min(seekTimeSec + seekAttempts * 1.5, video.duration * 0.5);
-          video.currentTime = newTarget;
+          video.currentTime = Math.min(1.5, video.duration * 0.25);
           return;
         }
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
         const duration = video.duration || 0;
 
         cleanup();
@@ -86,23 +87,21 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
         console.warn('Canvas capture error:', err);
         cleanup();
         resolve({
-          thumbnail: createFallbackThumbnail(videoFile.name),
+          thumbnail: createFastPlaceholderThumbnail(videoFile.name),
           duration: video.duration || 0,
         });
       }
     };
 
-    // Safety timeout after 4 seconds
+    // Fast safety timeout after 1.5s so slow decoders or unsupported codecs never hang the UI
     const timer = setTimeout(() => {
       captureCanvas();
-    }, 4000);
+    }, 1500);
 
     video.onloadedmetadata = () => {
       try {
-        // Target 1.5s or 20% into video to avoid black intro
-        const targetTime = video.duration > 3 
-          ? Math.min(seekTimeSec, video.duration * 0.3) 
-          : Math.max(0.2, video.duration * 0.2);
+        // Shallow seek (0.5s or 10% of short video) lands on earliest keyframe
+        const targetTime = video.duration > 1 ? Math.min(seekTimeSec, video.duration * 0.15) : 0.1;
         video.currentTime = targetTime;
       } catch {
         captureCanvas();
@@ -111,13 +110,12 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
 
     video.onseeked = () => {
       clearTimeout(timer);
-      // Essential for iOS/Android: Wait 250ms for GPU decoder to paint frame to surface
       if ('requestVideoFrameCallback' in video) {
         video.requestVideoFrameCallback(() => {
-          setTimeout(captureCanvas, 80);
+          setTimeout(captureCanvas, 40);
         });
       } else {
-        setTimeout(captureCanvas, 250);
+        setTimeout(captureCanvas, 120);
       }
     };
 
@@ -125,55 +123,60 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 1.5) {
       clearTimeout(timer);
       cleanup();
       resolve({
-        thumbnail: createFallbackThumbnail(videoFile.name),
+        thumbnail: createFastPlaceholderThumbnail(videoFile.name),
         duration: 0,
       });
     };
 
     video.src = objectUrl;
-    video.load();
   });
 }
 
 /**
- * Creates a clean canvas placeholder thumbnail with a gradient and video title
+ * Creates an instant, stylish placeholder thumbnail synchronously in < 1ms
+ * without waiting for video decoding.
  */
-function createFallbackThumbnail(title = 'Video') {
-  const canvas = document.createElement('canvas');
-  canvas.width = 480;
-  canvas.height = 270;
-  const ctx = canvas.getContext('2d');
+export function createFastPlaceholderThumbnail(title = 'Video') {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 480;
+    canvas.height = 270;
+    const ctx = canvas.getContext('2d');
 
-  // Gradient background
-  const grad = ctx.createLinearGradient(0, 0, 480, 270);
-  grad.addColorStop(0, '#312e81');
-  grad.addColorStop(1, '#0f172a');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 480, 270);
+    // Modern obsidian & indigo tech gradient
+    const grad = ctx.createLinearGradient(0, 0, 480, 270);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(0.5, '#1e1b4b');
+    grad.addColorStop(1, '#090d16');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 480, 270);
 
-  // Play icon circle
-  ctx.beginPath();
-  ctx.arc(240, 120, 36, 0, 2 * Math.PI);
-  ctx.fillStyle = 'rgba(99, 102, 241, 0.4)';
-  ctx.fill();
+    // Glowing circle accent
+    ctx.beginPath();
+    ctx.arc(240, 115, 38, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.25)';
+    ctx.fill();
 
-  // Play triangle
-  ctx.beginPath();
-  ctx.moveTo(232, 104);
-  ctx.lineTo(254, 120);
-  ctx.lineTo(232, 136);
-  ctx.closePath();
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
+    // Play icon triangle
+    ctx.beginPath();
+    ctx.moveTo(233, 98);
+    ctx.lineTo(256, 115);
+    ctx.lineTo(233, 132);
+    ctx.closePath();
+    ctx.fillStyle = '#06b6d4';
+    ctx.fill();
 
-  // Text title
-  ctx.fillStyle = '#cbd5e1';
-  ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif';
-  ctx.textAlign = 'center';
-  const cleanTitle = title.length > 26 ? title.substring(0, 24) + '...' : title;
-  ctx.fillText(cleanTitle, 240, 190);
+    // Video title text
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 17px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif';
+    ctx.textAlign = 'center';
+    const cleanTitle = title.length > 28 ? title.substring(0, 26) + '...' : title;
+    ctx.fillText(cleanTitle, 240, 188);
 
-  return canvas.toDataURL('image/jpeg', 0.8);
+    return canvas.toDataURL('image/jpeg', 0.8);
+  } catch {
+    return '';
+  }
 }
 
 /**
