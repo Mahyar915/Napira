@@ -8,16 +8,21 @@ import WelcomeHero from './components/WelcomeHero';
 import BackupModal from './components/BackupModal';
 import InstallPrompt from './components/InstallPrompt';
 import ClipboardBanner from './components/ClipboardBanner';
+import RenameModal from './components/RenameModal';
+import VideoActionSheet from './components/VideoActionSheet';
+import BatchActionBar from './components/BatchActionBar';
 import { 
   getAllVideos, 
   addVideo, 
   updateVideo, 
   deleteVideo, 
+  deleteMultipleVideos,
+  updateMultipleVideos,
   toggleFavorite, 
   resetToDefaults 
 } from './db/indexedDB';
 import { generateVideoThumbnail, createFastPlaceholderThumbnail, formatBytes } from './utils/thumbnail';
-import { Smartphone, Film, Star, Loader2, Sparkles } from 'lucide-react';
+import { Smartphone, Film, Star, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [videos, setVideos] = useState([]);
@@ -42,11 +47,17 @@ export default function App() {
     } catch {}
   }, [viewMode]);
   
-  // Modals & States
+  // Modals & Sheets
   const [activePlayerVideo, setActivePlayerVideo] = useState(null);
   const [isAddLinkOpen, setIsAddLinkOpen] = useState(false);
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(null);
+  const [actionSheetVideo, setActionSheetVideo] = useState(null);
+  const [renameModalVideo, setRenameModalVideo] = useState(null);
+
+  // Multi-Select Mode
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   
   // Gallery/File processing state
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
@@ -191,7 +202,6 @@ export default function App() {
     setActiveFilter('gallery');
 
     // 1. Optimistic Instant UI Insertion (< 30ms)
-    // Instantly create cards with lightweight placeholder thumbnails and file sizes
     const optimisticItems = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -212,6 +222,8 @@ export default function App() {
         isProcessing: true,
       };
       optimisticItems.unshift(optimisticItem);
+      // Immediately store in IndexedDB so ID exists right away
+      await addVideo(optimisticItem);
     }
 
     // Immediately show cards on screen!
@@ -229,26 +241,32 @@ export default function App() {
 
       try {
         const { thumbnail, duration } = await generateVideoThumbnail(file);
-        const finalItem = {
-          ...item,
+
+        // Update in IndexedDB with updateVideo so we NEVER overwrite user's renamed title!
+        await updateVideo(item.id, {
           thumbnail: thumbnail || item.thumbnail,
           duration: duration || null,
           isProcessing: false,
-        };
+        });
 
-        // Save to IndexedDB in background
-        await addVideo(finalItem);
-
-        // Update card in UI with high-res thumbnail & duration
+        // Update card in UI with thumbnail & duration while preserving user's title
         setVideos((prev) =>
-          prev.map((v) => (v.id === item.id ? finalItem : v))
+          prev.map((v) =>
+            v.id === item.id
+              ? {
+                  ...v,
+                  thumbnail: thumbnail || v.thumbnail,
+                  duration: duration || v.duration,
+                  isProcessing: false,
+                }
+              : v
+          )
         );
       } catch (err) {
         console.warn('Background optimize error for:', item.title, err);
-        const fallbackItem = { ...item, isProcessing: false };
-        await addVideo(fallbackItem);
+        await updateVideo(item.id, { isProcessing: false });
         setVideos((prev) =>
-          prev.map((v) => (v.id === item.id ? fallbackItem : v))
+          prev.map((v) => (v.id === item.id ? { ...v, isProcessing: false } : v))
         );
       }
     }
@@ -270,15 +288,29 @@ export default function App() {
     setVideos((prev) =>
       prev.map((v) => (v.id === id ? { ...v, favorite: isFav } : v))
     );
+    if (actionSheetVideo?.id === id) {
+      setActionSheetVideo((prev) => prev ? { ...prev, favorite: isFav } : null);
+    }
   };
 
-  // Handle updating video info (rename, thumbnail, etc.)
-  const handleRename = async (id, newTitle, extraUpdates = {}) => {
-    const updates = { title: newTitle, ...extraUpdates };
-    await updateVideo(id, updates);
+  // Handle renaming with guaranteed IndexedDB persistence
+  const handleRename = async (id, newTitle) => {
+    if (!newTitle || !newTitle.trim()) return;
+    const cleanTitle = newTitle.trim();
+
+    // 1. Immediately update UI state
     setVideos((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, ...updates } : v))
+      prev.map((v) => (v.id === id ? { ...v, title: cleanTitle } : v))
     );
+
+    // 2. Guaranteed persistence to IndexedDB
+    try {
+      await updateVideo(id, { title: cleanTitle });
+    } catch (err) {
+      console.error('Failed to persist rename to IndexedDB:', err);
+    }
+
+    if (navigator.vibrate) navigator.vibrate(20);
   };
 
   // Handle deleting video
@@ -289,17 +321,117 @@ export default function App() {
       if (activePlayerVideo?.id === id) {
         setActivePlayerVideo(null);
       }
+      if (actionSheetVideo?.id === id) {
+        setActionSheetVideo(null);
+      }
       if (navigator.vibrate) navigator.vibrate(20);
     }
   };
 
-  // Handle clear all videos
-  const handleClearAll = async () => {
-    if (window.confirm('Are you sure you want to clear all saved videos? This will empty your vault.')) {
-      setLoading(true);
-      await resetToDefaults();
-      setVideos([]);
-      setLoading(false);
+  // Multi-select batch handlers
+  const handleToggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.size === filteredVideos.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredVideos.map((v) => v.id)));
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    if (window.confirm(`Are you sure you want to delete ${count} selected video${count > 1 ? 's' : ''}?`)) {
+      const idsArray = Array.from(selectedIds);
+      await deleteMultipleVideos(idsArray);
+      setVideos((prev) => prev.filter((v) => !selectedIds.has(v.id)));
+      setSelectedIds(new Set());
+      setIsSelectionMode(false);
+      if (navigator.vibrate) navigator.vibrate(30);
+    }
+  };
+
+  const handleBatchFavorite = async (favStatus = true) => {
+    if (selectedIds.size === 0) return;
+    const idsArray = Array.from(selectedIds);
+    await updateMultipleVideos(idsArray, { favorite: favStatus });
+    setVideos((prev) =>
+      prev.map((v) => (selectedIds.has(v.id) ? { ...v, favorite: favStatus } : v))
+    );
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+    if (navigator.vibrate) navigator.vibrate(30);
+  };
+
+  const handleCancelSelection = () => {
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+  };
+
+  // Safe Share function (prevents WebKit Jetsam memory limit crash on iOS)
+  const handleSafeShare = async (video) => {
+    if (!video) return;
+
+    // 1. Social Media / Web links (100% crash-proof with navigator.share)
+    if (video.type !== 'local' && video.url) {
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: video.title || 'Napira Video',
+            text: `${video.title || 'Check out this video'} via Napira`,
+            url: video.url,
+          });
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+      // Fallback: Copy link
+      try {
+        await navigator.clipboard.writeText(video.url);
+        alert('Video link copied to clipboard!');
+      } catch {}
+      return;
+    }
+
+    // 2. Local device videos
+    if (video.type === 'local' && video.videoBlob) {
+      const isSmallFile = video.videoBlob.size < 15 * 1024 * 1024; // < 15MB
+      // Only attempt navigator.share on small files to prevent iOS Safari memory crash
+      if (isSmallFile && navigator.share && navigator.canShare) {
+        try {
+          const cleanFileName = (video.title || 'video').replace(/[^a-zA-Z0-9_-]/g, '_') + '.mp4';
+          const file = new File([video.videoBlob], cleanFileName, { type: video.videoBlob.type || 'video/mp4' });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              title: video.title || 'Video',
+              files: [file],
+            });
+            return;
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+
+      // For large files (15MB+) or when navigator.share fails:
+      // Trigger native browser download/save to Photos without crashing WebKit
+      const url = URL.createObjectURL(video.videoBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(video.title || 'video').replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
     }
   };
 
@@ -389,7 +521,7 @@ export default function App() {
         }}
       />
 
-      {/* Header with Search, Voice search, View switcher, and Actions */}
+      {/* Header with Search, Voice search, View switcher, Select mode, and Actions */}
       <Header
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
@@ -405,6 +537,8 @@ export default function App() {
         selectedTag={selectedTag}
         setSelectedTag={setSelectedTag}
         onOpenBackup={() => setIsBackupOpen(true)}
+        isSelectionMode={isSelectionMode}
+        setIsSelectionMode={setIsSelectionMode}
       />
 
       {/* Clipboard Auto-Detect Banner */}
@@ -438,8 +572,8 @@ export default function App() {
           />
         )}
 
-        {/* Featured Daily Spotlight (Shown when on All tab, not searching, and videos exist) */}
-        {!searchQuery && activeFilter === 'all' && !loading && videos.length > 0 && (
+        {/* Featured Daily Spotlight (Shown when on All tab, not searching, not in select mode, and videos exist) */}
+        {!searchQuery && activeFilter === 'all' && !isSelectionMode && !loading && videos.length > 0 && (
           <SpotlightCard videos={videos} onPlay={handlePlayVideo} />
         )}
 
@@ -495,10 +629,12 @@ export default function App() {
                   key={video.id}
                   video={video}
                   viewMode={viewMode}
-                  onPlay={(v) => setActivePlayerVideo(v)}
-                  onRename={handleRename}
-                  onDelete={handleDelete}
+                  onPlay={handlePlayVideo}
                   onToggleFavorite={handleToggleFavorite}
+                  onOpenActionSheet={(v) => setActionSheetVideo(v)}
+                  isSelectionMode={isSelectionMode}
+                  isSelected={selectedIds.has(video.id)}
+                  onToggleSelect={handleToggleSelect}
                 />
               ))}
             </div>
@@ -506,7 +642,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
+      {/* Footer (Clear All Videos permanently removed as requested) */}
       <footer className="border-t border-slate-800/80 py-4 px-4 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between max-w-7xl w-full mx-auto gap-2">
         <div className="flex items-center gap-2">
           <span className="font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400">Napira</span>
@@ -522,15 +658,43 @@ export default function App() {
           >
             Backup & Restore
           </button>
-          <span>•</span>
-          <button 
-            onClick={handleClearAll}
-            className="hover:text-red-400 transition text-[11px]"
-          >
-            Clear all videos
-          </button>
         </div>
       </footer>
+
+      {/* Video Action Sheet (3-dots bottom drawer, unclipped on mobile) */}
+      <VideoActionSheet
+        isOpen={!!actionSheetVideo}
+        video={actionSheetVideo}
+        onClose={() => setActionSheetVideo(null)}
+        onShare={handleSafeShare}
+        onToggleFavorite={handleToggleFavorite}
+        onOpenRename={(v) => {
+          setActionSheetVideo(null);
+          setRenameModalVideo(v);
+        }}
+        onDelete={handleDelete}
+        onPlay={handlePlayVideo}
+      />
+
+      {/* Focused Rename Modal with keyboard Enter support & guaranteed persistence */}
+      <RenameModal
+        isOpen={!!renameModalVideo}
+        video={renameModalVideo}
+        onClose={() => setRenameModalVideo(null)}
+        onSave={handleRename}
+      />
+
+      {/* Floating Batch Action Bar (Shown in Selection Mode) */}
+      {isSelectionMode && filteredVideos.length > 0 && (
+        <BatchActionBar
+          selectedCount={selectedIds.size}
+          totalCount={filteredVideos.length}
+          onSelectAll={handleSelectAll}
+          onBatchFavorite={handleBatchFavorite}
+          onBatchDelete={handleBatchDelete}
+          onCancel={handleCancelSelection}
+        />
+      )}
 
       {/* Video Player Modal with Slow-Motion & Loop */}
       <VideoPlayerModal

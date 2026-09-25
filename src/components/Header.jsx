@@ -16,7 +16,8 @@ import {
   RotateCw,
   Eye,
   LayoutGrid,
-  ShieldCheck
+  ShieldCheck,
+  CheckSquare
 } from 'lucide-react';
 
 function TikTokIcon({ className = "w-4 h-4" }) {
@@ -41,7 +42,9 @@ export default function Header({
   setViewMode,
   selectedTag,
   setSelectedTag,
-  onOpenBackup
+  onOpenBackup,
+  isSelectionMode,
+  setIsSelectionMode
 }) {
   const fileInputRef = useRef(null);
   const [isListening, setIsListening] = useState(false);
@@ -181,6 +184,22 @@ export default function Header({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Multi-Select Toggle Button */}
+            {stats.total > 0 && (
+              <button
+                onClick={() => setIsSelectionMode?.(prev => !prev)}
+                title={isSelectionMode ? "Exit Select Mode" : "Select multiple videos to delete or favorite"}
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                  isSelectionMode
+                    ? 'bg-cyan-400 text-slate-950 border-cyan-300 shadow-md font-extrabold scale-105'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                }`}
+              >
+                <CheckSquare className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{isSelectionMode ? 'Done' : 'Select'}</span>
+              </button>
+            )}
+
             {/* View Mode Switcher */}
             <button
               onClick={() => setViewMode?.(prev => prev === 'giant' ? 'normal' : 'giant')}

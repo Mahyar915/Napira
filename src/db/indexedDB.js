@@ -81,6 +81,22 @@ export async function updateVideo(id, updates) {
 }
 
 /**
+ * Update multiple videos in a single transaction (batch favorite, tag, etc.)
+ */
+export async function updateMultipleVideos(ids, updates) {
+  if (!ids || ids.length === 0) return;
+  const db = await initDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  for (const id of ids) {
+    const existing = await tx.store.get(id);
+    if (existing) {
+      await tx.store.put({ ...existing, ...updates });
+    }
+  }
+  await tx.done;
+}
+
+/**
  * Toggle favorite status of a video
  */
 export async function toggleFavorite(id) {
@@ -103,6 +119,19 @@ export async function toggleFavorite(id) {
 export async function deleteVideo(id) {
   const db = await initDB();
   await db.delete(STORE_NAME, id);
+}
+
+/**
+ * Delete multiple videos by ID array in a single transaction
+ */
+export async function deleteMultipleVideos(ids) {
+  if (!ids || ids.length === 0) return;
+  const db = await initDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  for (const id of ids) {
+    await tx.store.delete(id);
+  }
+  await tx.done;
 }
 
 /**
