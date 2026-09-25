@@ -36,6 +36,11 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 0.5) {
     const cleanup = () => {
       if (isDone) return;
       isDone = true;
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch {}
       URL.revokeObjectURL(objectUrl);
       if (video.parentNode) {
         video.parentNode.removeChild(video);
@@ -93,10 +98,10 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 0.5) {
       }
     };
 
-    // Fast safety timeout after 1.5s so slow decoders or unsupported codecs never hang the UI
+    // Fast safety timeout after 1.2s so slow decoders or unsupported codecs never hang the batch
     const timer = setTimeout(() => {
       captureCanvas();
-    }, 1500);
+    }, 1200);
 
     video.onloadedmetadata = () => {
       try {

@@ -301,7 +301,7 @@ export default function Header({
         <input 
           ref={fileInputRef}
           type="file"
-          accept="video/*,video/mp4,video/quicktime,video/webm"
+          accept="video/*"
           multiple
           className="hidden"
           onChange={handleFileChange}
