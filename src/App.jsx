@@ -379,7 +379,7 @@ export default function App() {
       <input 
         ref={fileInputHiddenRef}
         type="file"
-        accept="video/*"
+        accept="video/*,video/mp4,video/quicktime,video/webm"
         multiple
         className="hidden"
         onChange={(e) => {
