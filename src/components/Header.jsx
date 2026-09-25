@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   CheckSquare
 } from 'lucide-react';
+import UploadSourceModal from './UploadSourceModal';
 
 function TikTokIcon({ className = "w-4 h-4" }) {
   return (
@@ -47,8 +48,18 @@ export default function Header({
   setIsSelectionMode
 }) {
   const fileInputRef = useRef(null);
+  const filesInputRef = useRef(null);
   const [isListening, setIsListening] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+
+  const handleUploadClick = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      setIsUploadModalOpen(true);
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
 
   // Hard refresh & cache clear handler for mobile & desktop
   const handleHardRefresh = async () => {
@@ -248,7 +259,7 @@ export default function Header({
               </button>
 
               <button
-                onClick={() => fileInputRef.current?.click()}
+                onClick={handleUploadClick}
                 disabled={isProcessingFiles}
                 title="Upload videos from phone or computer"
                 className="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md shadow-indigo-600/25 transition disabled:opacity-50"
@@ -280,7 +291,7 @@ export default function Header({
           </button>
 
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleUploadClick}
             disabled={isProcessingFiles}
             className="flex items-center justify-center gap-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white text-xs font-bold py-2.5 px-1 rounded-xl shadow-md shadow-indigo-600/20 transition disabled:opacity-50"
           >
@@ -297,7 +308,7 @@ export default function Header({
           </button>
         </div>
 
-        {/* Hidden native mobile & desktop file input */}
+        {/* Hidden native mobile & desktop Photo Library input */}
         <input 
           ref={fileInputRef}
           type="file"
@@ -305,6 +316,23 @@ export default function Header({
           multiple
           className="hidden"
           onChange={handleFileChange}
+        />
+
+        {/* Hidden native Files app input (No accept attribute allows direct file browser on iOS) */}
+        <input 
+          ref={filesInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleFileChange}
+        />
+
+        {/* Mobile Upload Source Selection Modal */}
+        <UploadSourceModal
+          isOpen={isUploadModalOpen}
+          onClose={() => setIsUploadModalOpen(false)}
+          onSelectPhotoLibrary={() => fileInputRef.current?.click()}
+          onSelectFilesApp={() => filesInputRef.current?.click()}
         />
 
         {/* Search Bar with Voice Search */}
