@@ -98,29 +98,23 @@ export function generateVideoThumbnail(videoFile, seekTimeSec = 0.5) {
       }
     };
 
-    // Fast safety timeout after 1.2s so slow decoders or unsupported codecs never hang the batch
+    // Strict 700ms safety timeout - never delay the user
     const timer = setTimeout(() => {
       captureCanvas();
-    }, 1200);
+    }, 700);
 
-    video.onloadedmetadata = () => {
-      try {
-        // Shallow seek (0.5s or 10% of short video) lands on earliest keyframe
-        const targetTime = video.duration > 1 ? Math.min(seekTimeSec, video.duration * 0.15) : 0.1;
-        video.currentTime = targetTime;
-      } catch {
-        captureCanvas();
-      }
+    // Instant capture as soon as the first frame data is buffered (no heavy seek needed)
+    video.onloadeddata = () => {
+      clearTimeout(timer);
+      setTimeout(captureCanvas, 30);
     };
 
-    video.onseeked = () => {
-      clearTimeout(timer);
+    video.onloadedmetadata = () => {
       if ('requestVideoFrameCallback' in video) {
         video.requestVideoFrameCallback(() => {
-          setTimeout(captureCanvas, 40);
+          clearTimeout(timer);
+          captureCanvas();
         });
-      } else {
-        setTimeout(captureCanvas, 120);
       }
     };
 

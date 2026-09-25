@@ -227,76 +227,84 @@ export default function App() {
         videoBlob: file,
         createdAt: new Date(baseTimestamp - i * 1000).toISOString(),
         favorite: false,
-        isProcessing: true,
+        isProcessing: false, // Ready immediately!
       };
       optimisticItems.push(optimisticItem);
     }
 
-    // Immediately show all cards on screen in 0ms! Never wait for IndexedDB or decoder!
+    // Immediately show all cards on screen in 0ms!
     setVideos((prev) => [...optimisticItems, ...prev]);
     if (navigator.vibrate) navigator.vibrate(30);
 
-    // 2. Background Asynchronous Processing Queue (Non-blocking & memory-safe)
-    setIsProcessingFiles(true);
-    setProcessingProgress({ current: 0, total: optimisticItems.length });
-
-    for (let i = 0; i < optimisticItems.length; i++) {
-      const item = optimisticItems[i];
-      const file = item.videoBlob;
-      setProcessingProgress({ current: i + 1, total: optimisticItems.length });
-
-      // Yield 40ms to browser main thread so UI stays 100% smooth, animations play, touch works
-      await new Promise((resolve) => setTimeout(resolve, 40));
-
-      let thumbnail = item.thumbnail;
-      let duration = null;
-
-      try {
-        const res = await generateVideoThumbnail(file);
-        thumbnail = res.thumbnail || thumbnail;
-        duration = res.duration || null;
-      } catch (err) {
-        console.warn('Thumbnail generation skipped for:', item.title, err);
-      }
-
-      // Check current state in case user renamed or favorited this item while processing
-      const currentInState = videosRef.current.find((v) => v.id === item.id);
-      const finalTitle = currentInState?.title || item.title;
-      const finalFavorite = currentInState?.favorite ?? item.favorite;
-
-      const finalItem = {
-        ...item,
-        title: finalTitle,
-        favorite: finalFavorite,
-        thumbnail,
-        duration,
-        isProcessing: false,
-      };
-
-      // Persist to IndexedDB exactly once
-      try {
-        await addVideo(finalItem);
-      } catch (dbErr) {
-        console.error('IndexedDB save error for:', item.title, dbErr);
-      }
-
-      // Update card in UI with resolved thumbnail & duration
-      setVideos((prev) =>
-        prev.map((v) =>
-          v.id === item.id
-            ? {
-                ...v,
-                thumbnail,
-                duration,
-                isProcessing: false,
-              }
-            : v
-        )
-      );
+    // 2. Background Asynchronous Processing Queue (Non-blocking & silent)
+    if (optimisticItems.length > 1) {
+      setIsProcessingFiles(true);
+      setProcessingProgress({ current: 0, total: optimisticItems.length });
     }
 
-    setIsProcessingFiles(false);
-    if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
+    (async () => {
+      for (let i = 0; i < optimisticItems.length; i++) {
+        const item = optimisticItems[i];
+        const file = item.videoBlob;
+        if (optimisticItems.length > 1) {
+          setProcessingProgress({ current: i + 1, total: optimisticItems.length });
+        }
+
+        let thumbnail = item.thumbnail;
+        let duration = null;
+
+        try {
+          const res = await generateVideoThumbnail(file);
+          thumbnail = res.thumbnail || thumbnail;
+          duration = res.duration || null;
+        } catch (err) {
+          console.warn('Thumbnail generation skipped for:', item.title, err);
+        }
+
+        // Check current state in case user renamed or favorited this item while processing
+        const currentInState = videosRef.current.find((v) => v.id === item.id);
+        const finalTitle = currentInState?.title || item.title;
+        const finalFavorite = currentInState?.favorite ?? item.favorite;
+
+        const finalItem = {
+          ...item,
+          title: finalTitle,
+          favorite: finalFavorite,
+          thumbnail,
+          duration,
+          isProcessing: false,
+        };
+
+        // Persist to IndexedDB exactly once
+        try {
+          await addVideo(finalItem);
+        } catch (dbErr) {
+          console.error('IndexedDB save error for:', item.title, dbErr);
+        }
+
+        // Update card in UI with real thumbnail & duration if changed
+        if (thumbnail !== item.thumbnail || duration !== item.duration) {
+          setVideos((prev) =>
+            prev.map((v) =>
+              v.id === item.id
+                ? {
+                    ...v,
+                    thumbnail,
+                    duration,
+                    isProcessing: false,
+                  }
+                : v
+            )
+          );
+        }
+
+        // Yield to browser thread
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+
+      setIsProcessingFiles(false);
+      if (navigator.vibrate) navigator.vibrate(40);
+    })();
   };
 
   // Handle adding external link manually from modal
